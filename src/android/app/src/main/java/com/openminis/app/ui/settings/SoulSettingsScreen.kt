@@ -63,6 +63,7 @@ import com.openminis.app.R
 import com.openminis.app.ui.components.MinisButton
 import com.openminis.app.ui.components.MinisOutlinedButton
 import com.openminis.app.ui.components.MinisTextButton
+import com.openminis.app.agent.SoulBodyLimitCheck
 import com.openminis.app.agent.SoulIcon
 import com.openminis.app.agent.SoulFile
 import com.openminis.app.agent.SoulMDParser
@@ -190,6 +191,10 @@ fun SoulSettingsScreen(onBack: () -> Unit) {
         loaded = true
     }
 
+    // Language-aware length check used by both the editor counter and the
+    // Save button's enabled state. See [SoulStore.isOverLimit] for the rule.
+    val bodyLimitCheck by remember(body) { derivedStateOf { SoulStore.isOverLimit(body) } }
+
     val currentFile = SoulFile(
         metadata = SoulMetadata(
             name = name.ifBlank { SoulMetadata.DEFAULT.name },
@@ -232,7 +237,7 @@ fun SoulSettingsScreen(onBack: () -> Unit) {
             // (long) prompt editor to the bottom.
             MinisTextButton(
                 onClick = save,
-                enabled = loaded && isDirty,
+                enabled = loaded && isDirty && !bodyLimitCheck.isOverLimit,
             ) { Text(stringResource(R.string.soul_save)) }
         },
     ) {
@@ -343,6 +348,7 @@ fun SoulSettingsScreen(onBack: () -> Unit) {
 
         SettingsSection(
             header = stringResource(R.string.soul_section_personality),
+            footer = stringResource(R.string.soul_personality_footer),
         ) {
             Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
                 OutlinedTextField(
@@ -355,6 +361,30 @@ fun SoulSettingsScreen(onBack: () -> Unit) {
                         fontFamily = FontFamily.Monospace,
                     ),
                     placeholder = { Text(stringResource(R.string.soul_body_placeholder)) },
+                )
+                Spacer(Modifier.height(6.dp))
+                val isOverLimit = bodyLimitCheck.isOverLimit
+                val warnColor: Color =
+                    if (isOverLimit) Color(0xFFFF3B30)
+                    else MaterialTheme.colorScheme.onSurfaceVariant
+                val indicatorText: String = when (val c = bodyLimitCheck) {
+                    is SoulBodyLimitCheck.Ok -> {
+                        // Show the unit that matches whichever rule the
+                        // current body is being measured against — mirrors
+                        // iOS soulBodyCountText.
+                        soulBodyCountTextAndroid(body)
+                    }
+                    is SoulBodyLimitCheck.OverLimitChinese -> stringResource(
+                        R.string.soul_over_limit_chinese, c.chars, c.cap, SoulStore.ENGLISH_WORD_LIMIT,
+                    )
+                    is SoulBodyLimitCheck.OverLimitEnglish -> stringResource(
+                        R.string.soul_over_limit_english, c.words, c.cap, SoulStore.CHINESE_CHAR_LIMIT,
+                    )
+                }
+                Text(
+                    text = indicatorText,
+                    fontSize = 12.sp,
+                    color = warnColor,
                 )
             }
         }
@@ -644,6 +674,38 @@ private fun SoulEmojiPickerSheet(
                 ) { Text(stringResource(R.string.soul_icon_set)) }
             }
         }
+    }
+}
+
+/// Render the within-budget counter — picks the CJK character unit vs "words" depending on
+/// the same CJK ratio rule that decides which cap applies. Standalone
+/// helper so it stays out of the Composable hot-path's expression budget.
+@Composable
+private fun soulBodyCountTextAndroid(body: String): String {
+    val trimmed = body.trim()
+    if (trimmed.isEmpty()) return stringResource(R.string.soul_count_zero)
+    var cjk = 0
+    var total = 0
+    var i = 0
+    while (i < trimmed.length) {
+        val cp = trimmed.codePointAt(i)
+        total += 1
+        val isCJK =
+            cp in 0x4E00..0x9FFF ||
+                cp in 0x3400..0x4DBF ||
+                cp in 0x3040..0x309F ||
+                cp in 0x30A0..0x30FF ||
+                cp in 0xAC00..0xD7AF
+        if (isCJK) cjk += 1
+        i += Character.charCount(cp)
+    }
+    val ratio = if (total > 0) cjk.toDouble() / total else 0.0
+    return if (ratio > SoulStore.CJK_RATIO_THRESHOLD) {
+        val chars = trimmed.codePointCount(0, trimmed.length)
+        stringResource(R.string.soul_count_chars, chars, SoulStore.CHINESE_CHAR_LIMIT)
+    } else {
+        val words = trimmed.split(Regex("\\s+")).count { it.isNotEmpty() }
+        stringResource(R.string.soul_count_words, words, SoulStore.ENGLISH_WORD_LIMIT)
     }
 }
 

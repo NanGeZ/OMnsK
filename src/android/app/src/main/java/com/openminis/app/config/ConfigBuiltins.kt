@@ -958,8 +958,11 @@ internal object ConfigBuiltins {
     }
 
     private fun registerSoul(r: ConfigRegistry, context: Context) {
-        // No length cap and no injection filtering: the writer below
-        // stores the personality body verbatim.
+        // Length cap is language-aware now (Chinese ≤ 800 chars OR
+        // English ≤ 500 words); see [com.openminis.app.agent.SoulStore.isOverLimit].
+        // No schema-level maxLength — a fixed char count would be wrong
+        // for either language. The writer below rejects over-limit with a
+        // precise [ConfigError.InvalidValue].
 
         // Re-read SOUL.md every call so concurrent writes from Settings
         // UI don't race with minis-config writes. Parse falls back to
@@ -1138,7 +1141,10 @@ internal object ConfigBuiltins {
             ClosureField(
                 path = "soul.body",
                 displayName = "Soul personality prompt",
-                description = "Personality / voice instructions injected as a block in the system prompt. Any length, stored verbatim.",
+                description = "Personality / voice instructions injected as a block in the system prompt. Length cap is language-aware: Chinese ≤ ${com.openminis.app.agent.SoulStore.CHINESE_CHAR_LIMIT} chars OR English ≤ ${com.openminis.app.agent.SoulStore.ENGLISH_WORD_LIMIT} words (rule picked by the majority language). The writer also rejects prompt-injection patterns (\"ignore previous instructions\" etc.) — keep this to genuine character / tone guidance.",
+                // No schema maxLength because either character or word
+                // count is wrong for the *other* language. Both checks
+                // (length + injection) run in the writer below.
                 valueSchema = ConfigSchema.Str(),
                 risk = ConfigRisk.SENSITIVE,
                 revertable = true,
@@ -1148,6 +1154,25 @@ internal object ConfigBuiltins {
                 writer = { v ->
                     val raw = (v as? ConfigValue.Str)?.value
                         ?: throw ConfigError.TypeMismatch("string")
+                    if (com.openminis.app.agent.SystemPromptBuilder
+                            .containsInjectionPattern(raw)
+                    ) {
+                        throw ConfigError.InvalidValue(
+                            "Body contains a prompt-injection pattern (\"ignore/disregard/forget … previous/prior instructions\"). SOUL.md is for personality, not instructions to the model."
+                        )
+                    }
+                    val check = com.openminis.app.agent.SoulStore.isOverLimit(raw)
+                    when (check) {
+                        is com.openminis.app.agent.SoulBodyLimitCheck.Ok -> Unit
+                        is com.openminis.app.agent.SoulBodyLimitCheck.OverLimitChinese ->
+                            throw ConfigError.InvalidValue(
+                                "Over limit: ${check.chars} Chinese chars exceeds cap of ${check.cap}. Either trim to ≤ ${check.cap} chars, or rewrite mostly in English to use the ≤ ${com.openminis.app.agent.SoulStore.ENGLISH_WORD_LIMIT}-word cap."
+                            )
+                        is com.openminis.app.agent.SoulBodyLimitCheck.OverLimitEnglish ->
+                            throw ConfigError.InvalidValue(
+                                "Over limit: ${check.words} English words exceeds cap of ${check.cap}. Either trim to ≤ ${check.cap} words, or rewrite mostly in Chinese to use the ≤ ${com.openminis.app.agent.SoulStore.CHINESE_CHAR_LIMIT}-char cap."
+                            )
+                    }
                     val cur = loadCurrent()
                     saveCurrent(cur.copy(body = raw))
                 },
