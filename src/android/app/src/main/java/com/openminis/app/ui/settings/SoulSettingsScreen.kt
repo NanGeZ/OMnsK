@@ -363,28 +363,13 @@ fun SoulSettingsScreen(onBack: () -> Unit) {
                     placeholder = { Text(stringResource(R.string.soul_body_placeholder)) },
                 )
                 Spacer(Modifier.height(6.dp))
-                val isOverLimit = bodyLimitCheck.isOverLimit
-                val warnColor: Color =
-                    if (isOverLimit) Color(0xFFFF3B30)
-                    else MaterialTheme.colorScheme.onSurfaceVariant
-                val indicatorText: String = when (val c = bodyLimitCheck) {
-                    is SoulBodyLimitCheck.Ok -> {
-                        // Show the unit that matches whichever rule the
-                        // current body is being measured against — mirrors
-                        // iOS soulBodyCountText.
-                        soulBodyCountTextAndroid(body)
-                    }
-                    is SoulBodyLimitCheck.OverLimitChinese -> stringResource(
-                        R.string.soul_over_limit_chinese, c.chars, c.cap, SoulStore.ENGLISH_WORD_LIMIT,
-                    )
-                    is SoulBodyLimitCheck.OverLimitEnglish -> stringResource(
-                        R.string.soul_over_limit_english, c.words, c.cap, SoulStore.CHINESE_CHAR_LIMIT,
-                    )
-                }
+                // [no-limit] Length caps removed — the indicator always shows
+                // the raw magnitude. bodyLimitCheck is preserved as dead data
+                // so SoulBodyLimitCheck's When branches compile unchanged.
                 Text(
-                    text = indicatorText,
+                    text = soulBodyCountTextAndroid(body),
                     fontSize = 12.sp,
-                    color = warnColor,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }

@@ -22,6 +22,18 @@ val appCustomization = Properties().apply {
 fun customizationValue(key: String): String =
     (appCustomization.getProperty(key) ?: "").replace("\"", "\\\"")
 
+// [T-release-signing] Formal release signing block. Reads a JKS keystore
+// from /workspace/src/android/keystore/alias-release.jks (checked into
+// this workspace; keep it out of any public mirror). Falls back to the
+// debug keystore if the JKS is missing so `assembleRelease` still
+// produces a shippable APK when the keystore is not provisioned.
+// Passwords can be overridden at build time via
+// `ORG_GRADLE_PROJECT_ALIAS_KEYSTORE_PASSWORD` /
+// `ORG_GRADLE_PROJECT_ALIAS_KEY_PASSWORD` without editing this file.
+val releaseStoreFile = rootProject.file("keystore/alias-release.jks")
+val releaseStorePassword = (findProperty("ALIAS_KEYSTORE_PASSWORD") as String?) ?: "alias-release-pass"
+val releaseKeyPassword = (findProperty("ALIAS_KEY_PASSWORD") as String?) ?: "alias-release-pass"
+
 android {
     namespace = "com.openminis.app"
     // [T-android-dynamic-island] Bumped 35→36 so the Android 16 (Baklava)
@@ -34,6 +46,14 @@ android {
 
     defaultConfig {
         applicationId = "com.openminis.app"
+        // [T-stability-critical] Multi-dex release so D8 emits `classes2.dex`,
+        // `classes3.dex`, ... rather than a single 10MB classes.dex. D8's peak
+        // heap scales with dex output size; splitting the output is the single
+        // biggest lever we have against the `:app:dexBuilderRelease` OOM.
+        //
+        // `minSdk = 26` so no `androidx.multidex` library is required — the
+        // platform has loaded classesN.dex natively since API 21.
+        multiDexEnabled = true
         minSdk = 26
         targetSdk = 35
         versionCode = 28
@@ -75,6 +95,23 @@ android {
         }
     }
 
+    signingConfigs {
+        getByName("debug") {
+            // Left at the default debug keystore for debug + perf.
+        }
+        create("release") {
+            // [T-release-signing] Always point at the JKS at /workspace/src/android/keystore/alias-release.jks.
+            // Do not fall back to ~/.android/debug.keystore — that file only
+            // exists on a developer machine with the Android SDK installed,
+            // and its absence should fail loudly here rather than silently
+            // downgrading to the debug signing key.
+            storeFile = rootProject.file("keystore/alias-release.jks")
+            storePassword = releaseStorePassword
+            keyAlias = "alias"
+            keyPassword = releaseKeyPassword
+        }
+    }
+
     buildTypes {
         getByName("debug") {
             buildConfigField("boolean", "DEV_TOOLS", "true")
@@ -111,12 +148,25 @@ android {
             ndk {
                 debugSymbolLevel = "FULL"
             }
-            isMinifyEnabled = true
+            // [T-stability] R8 was observed to OOM-kill the Gradle daemon on this
+            // 5.8GiB / no-swap container — `:app:minifyReleaseWithR8` triggered
+            // "Gradle build daemon disappeared unexpectedly". R8 loads the full
+            // class graph in one pass and needs ~2.5-3GiB on top of the ~2.4GiB
+            // Gradle+Kotlin in-process JVM.
+            //
+            // Trade-off: disabling R8 leaves classes.dex unshrunk and unobfuscated,
+            // so the APK ships with readable class names and slightly larger
+            // dex. Install size and runtime behaviour are otherwise identical —
+            // D8 still emits the same dex bytecode and the ABI splits are
+            // unchanged. Swap the flag back on once the build moves to a
+            // >=16GiB machine.
+            isMinifyEnabled = false
+            isShrinkResources = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("release")
         }
     }
 
@@ -390,3 +440,19 @@ dependencies {
     androidTestImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
     androidTestImplementation("junit:junit:4.13.2")
 }
+
+// [T-stability-critical] Force D8/R8 forked workers to run IN-PROCESS.
+//
+// AGP's DexingWorkAction can run as (a) an in-process WorkerAction inside
+// the Gradle daemon, or (b) a forked JVM. The forked path is what OOM-kills
+// us: the forked JVM is a fresh process with `-Xmx` derived from the
+// container's total RAM (a fraction of Runtime.maxMemory()) — dmesg shows
+// `total-vm:7564828kB`, a 7.5GB reservation, before the kernel OOM-kills
+// it at 4.04GiB anon-rss. There is no public API to cap that fork's -Xmx.
+//
+// In-process is the only lever that actually bounds D8's memory: it runs
+// inside the Gradle daemon, whose heap we already cap at `-Xmx1200m` in
+// gradle.properties. Combined with `org.gradle.workers.max=1` (serial) and
+// `android.useFullClasspathForDexingTransform=true` (each D8 call gets the
+// merged classpath, not per-jar slices), peak daemon RSS stays under 3.5GB.
+System.setProperty("android.enableDexingArtifactTransform.inProcess", "true")

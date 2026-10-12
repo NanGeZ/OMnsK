@@ -75,7 +75,7 @@ data class SoulMetadata(
         const val DISPLAY_EMOJI = "✨"
 
         val DEFAULT = SoulMetadata(
-            name = "Minis",
+            name = "Alias",
             // Default emoji is intentionally empty — UI uses the fixed
             // [displayEmoji] sparkle and [SoulMDParser.serialize] no longer
             // writes the `emoji:` line. The field is kept on the struct only
@@ -261,10 +261,10 @@ object SoulStore {
 
     const val CJK_RATIO_THRESHOLD: Double = 0.3
     // [no-limit] Personality body length caps removed — the persona prompt may
-    // be arbitrarily long. Setting both to Int.MAX_VALUE neutralises every
-    // length gate (Settings Save button, minis-config writer, prompt-build
-    // fallback) in one place: isOverLimit() compares against these constants,
-    // so no body can ever exceed them.
+    // be arbitrarily long. Both limits are Int.MAX_VALUE so isOverLimit()
+    // can never trip and downstream When branches stay trivially
+    // unreachable. Keep the constants: callers still read them and a
+    // semantic future re-introduction should re-set these to real values.
     const val CHINESE_CHAR_LIMIT: Int = Int.MAX_VALUE
     const val ENGLISH_WORD_LIMIT: Int = Int.MAX_VALUE
 
@@ -576,7 +576,7 @@ object SystemPromptBuilder {
         val file = SoulStore.load(context)
         val name = (file?.metadata?.name ?: SoulMetadata.DEFAULT.name)
             .trim()
-            .ifEmpty { "Minis" }
+            .ifEmpty { "Alias" }
 
         val style = (file?.metadata?.style ?: "").trim()
 
