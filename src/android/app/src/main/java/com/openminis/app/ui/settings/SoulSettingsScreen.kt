@@ -700,12 +700,14 @@ private fun soulBodyCountTextAndroid(body: String): String {
         i += Character.charCount(cp)
     }
     val ratio = if (total > 0) cjk.toDouble() / total else 0.0
+    // [no-limit] Length caps removed, so the counter shows the raw magnitude
+    // only — no "/ cap" suffix (the cap is now unbounded).
     return if (ratio > SoulStore.CJK_RATIO_THRESHOLD) {
         val chars = trimmed.codePointCount(0, trimmed.length)
-        stringResource(R.string.soul_count_chars, chars, SoulStore.CHINESE_CHAR_LIMIT)
+        stringResource(R.string.soul_count_chars_only, chars)
     } else {
         val words = trimmed.split(Regex("\\s+")).count { it.isNotEmpty() }
-        stringResource(R.string.soul_count_words, words, SoulStore.ENGLISH_WORD_LIMIT)
+        stringResource(R.string.soul_count_words_only, words)
     }
 }
 
